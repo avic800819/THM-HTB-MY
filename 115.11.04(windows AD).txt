@@ -1,0 +1,182 @@
+==================================================
+【HTB 實驗筆記】Active Directory 管理指導入門
+==================================================
+
+1. 連線方式 (透過 Pwnbox 或自身 Kali/VPN)：
+   - 工具：xfreerdp
+   - 帳號：htb-student_adm
+   - 密碼：Academy_student_DA!
+   - 指令：
+     xfreerdp /v:<目標IP> /u:htb-student_adm /p:'Academy_student_DA!'
+
+--------------------------------------------------
+2. 任務一：帳號生命週期管理 (User Management)
+--------------------------------------------------
+- 目標路徑 (OU)：
+  inlaneFreight.local -> Corp -> Employees -> HQ-NYC -> IT
+
+- 新增使用者 (需設定 Full name, Email, Display name, 首次登入強制改密碼)：
+  1. Andromeda Neptune
+  2. Orion Khorousav
+  3. Artemis Callisto
+
+- 停用/移除離職人員帳號：
+  1. Mike O'Kane
+  2. Paul Valenzia
+
+- 解鎖帳號 (解除 Lockout 並要求重設密碼)：
+  - Adam Masters (因密碼輸入錯誤多次被鎖定)
+
+- 常用 PowerShell Cmdlet：
+  - New-ADUser
+  - Disable-ADAccount / Remove-ADUser
+  - Unlock-ADAccount
+  - Set-ADAccountPassword
+
+--------------------------------------------------
+3. 任務二：管理群組與組織單位 (Groups & OUs)
+--------------------------------------------------
+- 建立安全群組 (Security Group)：
+  - 名稱：Security Analysts
+  - 位置：IT 組織單位 (OU) 下
+- 操作：將新加入的員工帳號加入此群組。
+- 常用 PowerShell Cmdlet：
+  - New-ADGroup
+  - Add-ADGroupMember
+
+--------------------------------------------------
+4. 任務三：群組原則管理 (GPO Management)
+--------------------------------------------------
+- 複製現有 GPO：Logon Banner
+- 重新命名為：Security Analysts Control
+- 套用對象：Security Analysts (OU)
+- 策略修改需求：
+  1. 修改使用者密碼策略 (Password Policies)
+  2. 明確允許使用者存取 PowerShell 和 CMD
+  3. 啟用登入橫幅 (Logon Banner)
+  4. 封鎖抽取式存放裝置 (封鎖 USB 存取)
+- 常用工具：
+  - Group Policy Management Console (gpmc.msc)
+  - Copy-GPO (PowerShell)
+==================================================
+
+==================================================
+【實戰解析】滲透測試與打靶什麼時候會用到 AD？
+==================================================
+
+在企業滲透測試與 HTB / OSCP 靶機中，取得邊界機器（Web/服務）的存取權後，
+接下來的所有提權、橫向移動與奪旗，全部圍繞著 Active Directory (AD) 展開：
+
+--------------------------------------------------
+1. 資訊枚舉與使用者偵察 (Enumeration)
+--------------------------------------------------
+* 實戰時機：拿到一般網域使用者的 Shell 時。
+* 核心用途：
+  - AD 本身具備「低權限即可查詢大部分物件」的特性。
+  - 滲透員會利用 LDAP 或 RPC 指令（例如 net user /domain、PowerView、rpcclient）
+    列出全網域的使用者清單。
+  - 尋找標籤含有「密碼提示」、「無須 Kerberos 預先驗證 (DONT_REQ_PREAUTH)」的帳號
+    進行 AS-REP Roasting 離線爆破密碼。
+  - 尋找綁定服務主體名稱 (SPN) 的服務帳號，進行 Kerberoasting 攻擊提取 TGS 票證。
+
+--------------------------------------------------
+2. 權限提升與群組關係圖 (Privilege Escalation)
+--------------------------------------------------
+* 實戰時機：分析使用者所屬的安全群組 (Security Groups) 與存取控制清單 (ACLs)。
+* 核心用途：
+  - 工具（如 BloodHound / SharpHound）會抓取 AD 內所有「人、群組、電腦」的關聯。
+  - 靶機常見弱點：
+    * 網管偷懶，將普通員工或分析師帳號加入了高權限群組（例如 Backup Operators、
+      Account Operators、Remote Desktop Users、Server Operators）。
+    * 特權繼承失誤：某個低權限群組對 Domain Admins 或高權限物件擁有 WriteDacl / 
+      GenericAll 權限，攻擊者可藉此直接把自己加進管理員群組。
+
+--------------------------------------------------
+3. 組織單位定位與橫向移動 (Lateral Movement)
+--------------------------------------------------
+* 實戰時機：在內網尋找高價值目標（Crown Jewels）主機。
+* 核心用途：
+  - AD 的組織單位 (OU) 暴露了企業結構（例如 Finance、IT、R&D、Domain Controllers）。
+  - 滲透員會順著 OU 分類定位財務主機、網域控制站 (DC) 或核心資料庫。
+  - 透過枚舉特定 OU 內的機器，利用已竊取或噴灑成功的帳密，使用 WinRM (Evil-WinRM)、
+    WMI 或 RDP 橫向跳板登入。
+
+--------------------------------------------------
+4. 群組原則濫用提權 (GPO Abuse)
+--------------------------------------------------
+* 實戰時機：檢查現有 GPO 權限與配置。
+* 核心用途：
+  - GPO 是網管集中派送軟體、排程任務和腳本的管道。
+  - 若攻擊者發現自己控制的帳號對某個 GPO 擁有寫入權限（Edit / Write）：
+    * 可在該 GPO 中加入惡意啟動腳本（Logon Script）
+
+
+--------------------------
+==================================================
+【HTB 實驗筆記】AD 管理：指導實驗第二部分
+==================================================
+
+1. 連線目標與憑據：
+   - 方式：透過 Pwnbox 或自建 Kali/VPN 使用 RDP 連線
+   - 目標主機名稱：ACADEMY-IAD-W10
+   - 本地初始登入帳號：image
+   - 本地初始登入密碼：Academy_student_AD!
+   - 網域管理員憑據 (用來執行加入網域)：
+     帳號：htb-student_adm
+     密碼：Academy_student_DA!
+
+--------------------------------------------------
+2. 任務四：向網域中新增和刪除計算機 (Domain Join & OU 移動)
+--------------------------------------------------
+- 目標網域：INLANEFREIGHT.local
+- 操作流程：
+  1. 透過 RDP 連線登入目標 Windows 主機 (ACADEMY-IAD-W10)。
+  2. 執行加入網域動作：
+     - GUI 做法：系統設定 -> 關於 -> 重新命名此電腦 (進階) / 變更 -> 網域填入 INLANEFREIGHT.local
+     - 彈出憑據時輸入 htb-student_adm / Academy_student_DA!
+     - PowerShell 做法：
+       Add-Computer -DomainName "INLANEFREIGHT.local" -Credential (Get-Credential) -Restart
+  3. 重開機後，切換回網域控制器 (DC) 或使用 RSAT 工具：
+     - 開啟「Active Directory 使用者和電腦」(dsa.msc)。
+     - 在預設的 "Computers" 容器找到剛加進來的「ACADEMY-IAD-W10」。
+     - 將其移動 (Move) 到新建立的 OU (例如 Security Analysts 所在的 OU)。
+     - 目的：確保上一動設定的群組原則 (GPO) 能正確派送並生效。
+==================================================
+
+==================================================
+【實戰解析】滲透與打靶什麼時候會用到「電腦加網域/電腦帳號」？
+==================================================
+
+很多新手以為「只有人有帳號」，其實在 AD 裡「每台電腦也是一個帳號」
+（結尾帶有 $ 符號，例如 ACADEMY-IAD-W10$）。這在打靶與滲透中是極度關鍵的突破口：
+
+1. 預設每個人都能加 10 台電腦 (MachineAccountQuota, MAQ)
+   - 攻擊時機：當你打下一台外圍機，拿到一個極低權限的網域帳號時。
+   - 滲透利用：
+     * AD 預設設定允許任何普通使用者建立最多 10 個「電腦帳號」 (MAQ = 10)。
+     * 攻擊者可利用指令（如 impacket 的 addcomputer.py）自行在網域中註冊偽造的電腦帳號。
+     * 這是發動「資源型限制委派 (RBCD)」攻擊的必備前置條件，能讓你把低權限直接提權成該機器的 SYSTEM 權限。
+
+2. 辨識高防禦與高價值目標 (OU 枚舉與定位)
+   - 攻擊時機：進入內網後的橫向移動階段。
+   - 滲透利用：
+     * 查出每台電腦躺在什麼 OU，就能推測它的用途與防禦等級。
+     * 例如看到一台主機躺在 "Domain Controllers" 或 "PCI-DSS-Servers"，代表是心臟；
+       若躺在未妥善配置 GPO 的測試區 OU（如 "Dev-Computers"、"Staging"），
+       通常代表沒裝防毒、沒設安全限制，是最佳橫向跳板。
+
+3. 本地 SYSTEM 權限對外就是「電腦帳號」
+   - 攻擊時機：拿下一台 Windows 靶機的 `NT AUTHORITY\SYSTEM` 權限。
+   - 滲透利用：
+     * SYSTEM 雖然是本地最高權限，但訪問其他網路主機時，用的就是「這台電腦的網域身分 (HOSTNAME$)」。
+     * 如果網管把這台電腦帳號加進了特權群組，或配置了不當的存取控制 (ACL)，
+       你就能直接以電腦身分在內網橫向攻擊或執行 DCSync。
+
+4. 著名的無敵漏洞：sAMAccountName 欺騙 (NoPac / CVE-2021-42278 & CVE-2021-42287)
+   - 攻擊時機：中高難度 AD 靶機的常客（秒殺網域控制器的經典漏洞）。
+   - 滲透利用：
+     * 攻擊者利用自己建立的「電腦帳號」，將其改名偽裝成網域控制站 (DC$) 的名字。
+     * 向 Kerberos 申請 TGT 票證後再改回原名，並申請 S4U2self 服務票證。
+     * 結果：直接拿到 Domain Admin 權限，2 秒內打爆整個網域。
+==================================================
+
